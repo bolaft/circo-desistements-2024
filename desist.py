@@ -2,7 +2,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
-import pandas as pd
+import re
+from bs4 import BeautifulSoup
 
 # Configuration du service pour le driver Chrome
 service = Service(ChromeDriverManager().install())
@@ -31,14 +32,36 @@ driver.quit()
 with open("out.html", "w") as f:
     f.write(table_html)
 
-from bs4 import BeautifulSoup
-
 # Lire le fichier HTML
 with open('out.html', 'r', encoding='utf-8') as file:
     content = file.read()
 
 # Parser le contenu HTML avec BeautifulSoup
 soup = BeautifulSoup(content, 'lxml')
+
+resultats = soup.find_all('div', class_='resultat_candidat')
+text_resultats = [r.text for r in resultats]
+# Initialiser le dictionnaire des résultats
+resultats_dict = {}
+resultats_dict = {}
+    
+# Expression régulière mise à jour pour capturer les pourcentages avec ou sans virgule
+pattern = re.compile(r'(Mme|M\.)\s+([\w\s\-éèêëïîöôüûàç\'’]+)\s*:\s*(\d+(?:,\d+)?)\s*%')
+
+for resultat in text_resultats:
+    i_percent = resultat.index('%')
+    txt = resultat[:i_percent+1]
+    match = pattern.search(txt)
+    if match:
+        titre = match.group(1)
+        group2 = match.group(2).replace('\xa0', ' ')
+        last_name = group2.strip().split()[-1]
+        fl = group2[:1]
+        n_key = fl + last_name
+        pourcentage = float(match.group(3).replace(',', '.'))
+        
+        # Ajouter le résultat au dictionnaire
+        resultats_dict[n_key] = pourcentage
 
 # Initialiser la liste des candidats
 candidats_ensemble = []
@@ -64,6 +87,14 @@ for row in table_rows:
     nom_cell = row.find('div', class_='tableauCellule flex nom')
     candidats = nom_cell.find_all('div', class_='candidat')
 
+    candidats_scores = {}
+
+    for candidat_div in candidats:
+        candidat_nom = candidat_div.text.strip().replace("désist.", "")
+        candidats_scores[candidat_nom.split()[-1]] = resultats_dict[candidat_nom[:1] + candidat_nom.split()[-1]]
+
+    min_score = min(candidats_scores.values())
+
     # Parcourir les partis et les candidats en parallèle
     for i in range(min(len(parties), len(candidats))):
         parti = parties[i].text.strip()
@@ -74,14 +105,17 @@ for row in table_rows:
         if "ensemble" in parti.lower():
             # Vérifier s'il y a une mention de désistement
             desistement = bool(candidat_div.find('span', class_='carre desistement'))
-            
-            # Ajouter le candidat à la liste
-            candidats_ensemble.append({
-                'nom': candidat_nom,
-                'desistement': desistement,
-                'circo': circo[:-6].strip(),
-                "parti": parti
-            })
+            is_third = bool(candidats_scores[candidat_nom.split()[-1].replace("désist.", "")] == min_score)
+
+            if is_third:
+                # Ajouter le candidat à la liste
+                candidats_ensemble.append({
+                    'nom': candidat_nom.replace("désist.", ""),
+                    'desistement': desistement,
+                    'circo': circo[:-6].strip(),
+                    "parti": parti,
+                    "score": min_score
+                })
 
 # Calculer le nombre total de candidats "ENSEMBLE"
 total_candidats = len(candidats_ensemble)
@@ -96,7 +130,7 @@ print("Total : " + str(len(candidats_ensemble)))
 
 with open("out.csv", "w") as f:
     for c in candidats_ensemble:
-        l = f"{c['circo']}, {c['nom']}, {c['parti']}, {'OUI' if c['desistement'] else 'NON'}"
+        l = f"{c['circo']}, {c['nom']}, {c['parti']}, {'OUI' if c['desistement'] else 'NON'}, {c['score']}"
         f.write(l + "\n")
         print(l)
 
